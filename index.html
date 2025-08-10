@@ -1,0 +1,552 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Matrix Hacker Style Site (HTML + JS)</title>
+<!-- Tailwind CDN -->
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  /* Matrix Background */
+  body,html {
+    margin: 0; padding: 0; height: 100%;
+    background: black;
+    color: #22c55e;
+    font-family: monospace;
+  }
+  #matrix-bg {
+    position: fixed;
+    inset: 0;
+    z-index: -10;
+    pointer-events: none;
+    opacity: 0.2;
+    background-image:
+      radial-gradient(rgba(0,0,0,0) 1px, transparent 1px),
+      linear-gradient(transparent 0, rgba(0,255,70,0.06) 1px);
+    background-size: 30px 30px, 1px 20px;
+    animation: shift 20s linear infinite;
+  }
+  @keyframes shift {
+    0% { background-position: 0 0, 0 0; }
+    100% { background-position: 0 -200px, 0 200px; }
+  }
+  textarea, input, select {
+    background: rgba(0,0,0,0.6);
+    border: 1px solid #166534;
+    color: #bbf7d0;
+    font-family: monospace;
+  }
+  input[type="file"] {
+    color: #22c55e;
+  }
+  .btn-green {
+    background-color: #16a34a;
+    color: black;
+    font-weight: 600;
+  }
+  .btn-green:hover {
+    background-color: #15803d;
+  }
+  .border-green {
+    border-color: #166534;
+  }
+  .text-green-light {
+    color: #bbf7d0;
+  }
+  /* Scroll container for admin */
+  #admin-scroll {
+    max-height: 400px;
+    overflow-y: auto;
+  }
+  iframe {
+    border-radius: 0.375rem;
+  }
+</style>
+</head>
+<body>
+<div id="matrix-bg"></div>
+
+<div class="min-h-screen flex items-center justify-center p-6">
+  <div id="app" class="w-full max-w-5xl grid grid-cols-1 md:grid-cols-2 gap-6">
+    <!-- Left Panel -->
+    <div id="left-panel" class="flex items-center justify-center">
+      <!-- Login or content will be rendered here -->
+    </div>
+    <!-- Right Panel (info) -->
+    <div class="p-6 border-l border-green-900 hidden md:block rounded-lg">
+      <div class="text-green-300 font-mono text-xl mb-3">Matrix Stream</div>
+      <div class="h-full overflow-auto space-y-4 text-green-light font-mono text-sm bg-black/50 border border-green-800 rounded p-4">
+        <div>Tip: Als Admin (Void) kannst du Nutzer laden, editieren, Bilder hochladen und YouTube-Links einfügen.</div>
+        <div>Paste a users.json file to replace or append users. Use the export button to download the current file.</div>
+        <div>Customize the look in code: change fonts, animation speed, neon colors.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="absolute bottom-4 left-1/2 -translate-x-1/2 text-xs text-green-400 font-mono opacity-80">matrix-hacker-ui — demo</div>
+
+<script>
+(() => {
+  "use strict";
+
+  // Initial default users
+  const DEFAULT_USERS = [
+    {
+      id: "void",
+      displayName: "Void",
+      role: "admin",
+      show: { text: false, image: false, video: false },
+      text: "I am Void — system administrator.",
+      image: "",
+      video: ""
+    },
+    {
+      id: "neo",
+      displayName: "Neo",
+      role: "user",
+      show: { text: true, image: true, video: false },
+      text: "Follow the white rabbit.",
+      image: "",
+      video: ""
+    }
+  ];
+
+  // State
+  let users = [];
+  let currentUserId = null;
+
+  // Save/load to localStorage
+  function saveUsers() {
+    localStorage.setItem("matrix_users_v1", JSON.stringify(users));
+  }
+  function loadUsers() {
+    let stored = localStorage.getItem("matrix_users_v1");
+    if (stored) {
+      try {
+        users = JSON.parse(stored);
+        if (!Array.isArray(users)) throw new Error("No array");
+      } catch {
+        users = DEFAULT_USERS.slice();
+      }
+    } else {
+      users = DEFAULT_USERS.slice();
+    }
+  }
+
+  // Utils
+  function toEmbedUrl(url) {
+    if (!url) return "";
+    try {
+      let u = new URL(url);
+      if (u.hostname.includes("youtube.com")) {
+        const v = u.searchParams.get("v");
+        if (v) return `https://www.youtube.com/embed/${v}`;
+      }
+      if (u.hostname.includes("youtu.be")) {
+        const id = u.pathname.slice(1);
+        return `https://www.youtube.com/embed/${id}`;
+      }
+    } catch {
+      return "";
+    }
+    return url;
+  }
+
+  function findUser(id) {
+    return users.find(u => u.id === id) || null;
+  }
+
+  // DOM Elements
+  const leftPanel = document.getElementById("left-panel");
+
+  // --- RENDER ---
+
+  function renderLogin() {
+    leftPanel.innerHTML = `
+      <div class="w-full max-w-md mx-auto p-6 bg-black/80 border border-green-600 rounded-2xl shadow-2xl">
+        <h2 class="text-3xl font-mono text-green-300 text-center">LOGIN</h2>
+        <p class="text-sm text-green-200/70 text-center mb-4">Enter ID (try <strong>void</strong> for admin)</p>
+        <div class="flex gap-2 mb-4">
+          <input id="login-input" placeholder="user id" class="flex-1 bg-transparent border border-green-700 rounded px-3 py-2 text-green-200 font-mono" />
+          <button id="login-btn" class="px-4 py-2 rounded bg-green-600/80 hover:bg-green-600 text-black font-semibold">Go</button>
+        </div>
+        <div class="flex gap-2 mb-4">
+          <select id="quick-login" class="flex-1 bg-transparent border border-green-700 rounded px-3 py-2 text-green-200 font-mono">
+            <option value="">-- quick login --</option>
+            ${users.map(u => `<option value="${u.id}">${u.displayName} (${u.id})</option>`).join("")}
+          </select>
+          <button id="reset-btn" class="px-3 py-2 border border-green-700 rounded font-mono text-green-200">Reset</button>
+        </div>
+        <div class="text-xs text-green-300/70 font-mono">
+          <div>Oder: Lade eine users.json Datei:</div>
+          <div class="mt-2 flex gap-2">
+            <input id="load-json-file" type="file" accept="application/json" class="text-green-400" />
+            <button id="download-json" class="px-3 py-1 rounded border border-green-700">Download current</button>
+          </div>
+        </div>
+      </div>
+    `;
+
+    // Event handlers
+    const loginInput = document.getElementById("login-input");
+    const loginBtn = document.getElementById("login-btn");
+    const quickLogin = document.getElementById("quick-login");
+    const resetBtn = document.getElementById("reset-btn");
+    const loadJsonFile = document.getElementById("load-json-file");
+    const downloadJson = document.getElementById("download-json");
+
+    loginInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        login(loginInput.value.trim());
+      }
+    });
+    loginBtn.addEventListener("click", () => {
+      login(loginInput.value.trim());
+    });
+    quickLogin.addEventListener("change", () => {
+      if (quickLogin.value) login(quickLogin.value);
+    });
+    resetBtn.addEventListener("click", () => {
+      if (confirm("Mit Standard-Nutzern überschreiben?")) {
+        users = DEFAULT_USERS.slice();
+        saveUsers();
+        alert("Standard-Nutzer geladen");
+        renderLogin();
+      }
+    });
+    loadJsonFile.addEventListener("change", (e) => {
+      if (e.target.files && e.target.files[0]) {
+        loadUsersFile(e.target.files[0]);
+        e.target.value = null;
+      }
+    });
+    downloadJson.addEventListener("click", () => {
+      downloadUsersFile();
+    });
+  }
+
+  function renderLoggedIn() {
+    const user = findUser(currentUserId);
+    if (!user) {
+      logout();
+      return;
+    }
+
+    leftPanel.innerHTML = `
+      <div class="w-full">
+        <div class="flex items-center justify-between mb-4 text-green-200 font-mono">
+          Eingeloggt als <strong>${user.displayName}</strong>
+          <div class="flex gap-2">
+            <button id="logout-btn" class="px-3 py-1 rounded border border-green-700">Logout</button>
+            <label class="px-3 py-1 rounded border border-green-700 cursor-pointer">
+              <input id="load-users-json" type="file" accept="application/json" class="hidden" />
+              Load users
+            </label>
+            <button id="export-users-json" class="px-3 py-1 rounded border border-green-700">Export</button>
+          </div>
+        </div>
+        <div id="main-content" class="space-y-4"></div>
+      </div>
+    `;
+
+    // Events
+    document.getElementById("logout-btn").addEventListener("click", logout);
+    const loadUsersJson = document.getElementById("load-users-json");
+    loadUsersJson.addEventListener("change", e => {
+      if (e.target.files && e.target.files[0]) {
+        loadUsersFile(e.target.files[0]);
+        e.target.value = null;
+      }
+    });
+    document.getElementById("export-users-json").addEventListener("click", downloadUsersFile);
+
+    // Render inside main content depending on role
+    if (user.role === "admin") {
+      renderAdminPanel();
+    }
+    renderPublicView();
+  }
+
+  // Render Admin Panel
+  function renderAdminPanel() {
+    const main = document.getElementById("main-content");
+
+    // Container with add user button + export
+    const adminControls = document.createElement("div");
+    adminControls.className = "flex items-center justify-between";
+    adminControls.innerHTML = `
+      <h3 class="text-xl font-mono text-green-200">Admin-Konsole — alle Nutzer</h3>
+      <div class="flex gap-2">
+        <button id="add-user-btn" class="px-3 py-1 rounded border border-green-700">Neuer Nutzer</button>
+        <button id="export-users-json-admin" class="px-3 py-1 rounded border border-green-700">Export JSON</button>
+      </div>
+    `;
+    main.appendChild(adminControls);
+
+    // User list container
+    const userList = document.createElement("div");
+    userList.id = "admin-scroll";
+    userList.className = "mt-2 space-y-3 border border-green-700 rounded p-3 overflow-y-auto max-h-96";
+    main.appendChild(userList);
+
+    // Render all users
+    function renderUserList() {
+      userList.innerHTML = "";
+      users.forEach((u, i) => {
+        const div = document.createElement("div");
+        div.className = "bg-black/70 border border-green-600 rounded p-3 flex flex-col md:flex-row gap-3 md:gap-4 items-start";
+
+        div.innerHTML = `
+          <input class="bg-transparent border border-green-600 rounded px-2 py-1 w-24 text-green-300 font-mono" value="${u.id}" data-index="${i}" data-field="id" />
+          <input class="bg-transparent border border-green-600 rounded px-2 py-1 flex-1 text-green-300 font-mono" value="${u.displayName}" data-index="${i}" data-field="displayName" />
+          <select class="bg-transparent border border-green-600 rounded px-2 py-1 w-32 text-green-300 font-mono" data-index="${i}" data-field="role">
+            <option value="user" ${u.role==="user" ? "selected" : ""}>User</option>
+            <option value="admin" ${u.role==="admin" ? "selected" : ""}>Admin</option>
+          </select>
+          <button data-index="${i}" class="btn-green px-2 py-1 rounded font-mono">Delete</button>
+        `;
+
+        userList.appendChild(div);
+      });
+
+      // Add event listeners for inputs and delete buttons
+      userList.querySelectorAll("input[data-field]").forEach(input => {
+        input.addEventListener("input", (e) => {
+          const idx = +e.target.dataset.index;
+          const field = e.target.dataset.field;
+          users[idx][field] = e.target.value.trim();
+          saveUsers();
+          if (field === "id" && users[idx].id === currentUserId) {
+            currentUserId = users[idx].id; // update current id
+          }
+          renderLoggedIn(); // re-render for updated login options
+        });
+      });
+
+      userList.querySelectorAll("select[data-field]").forEach(sel => {
+        sel.addEventListener("change", (e) => {
+          const idx = +e.target.dataset.index;
+          users[idx].role = e.target.value;
+          saveUsers();
+          renderLoggedIn();
+        });
+      });
+
+      userList.querySelectorAll("button").forEach(btn => {
+        btn.addEventListener("click", (e) => {
+          const idx = +e.target.dataset.index;
+          if (confirm(`User ${users[idx].id} löschen?`)) {
+            users.splice(idx, 1);
+            saveUsers();
+            if (users[idx] && users[idx].id === currentUserId) logout();
+            renderLoggedIn();
+          }
+        });
+      });
+    }
+    renderUserList();
+
+    // Add new user
+    document.getElementById("add-user-btn").addEventListener("click", () => {
+      users.push({
+        id: `user${Date.now()}`,
+        displayName: "Neuer Nutzer",
+        role: "user",
+        show: { text: false, image: false, video: false },
+        text: "",
+        image: "",
+        video: ""
+      });
+      saveUsers();
+      renderLoggedIn();
+    });
+
+    // Export users
+    document.getElementById("export-users-json-admin").addEventListener("click", downloadUsersFile);
+  }
+
+  // Render public user view (below admin or for normal user)
+  function renderPublicView() {
+    const main = document.getElementById("main-content");
+    const user = findUser(currentUserId);
+    if (!user) return;
+
+    // Clear old user views except admin panel
+    [...main.children].forEach(child => {
+      if (!child.id || child.id !== "admin-scroll" && !child.classList.contains("admin-controls")) {
+        child.remove();
+      }
+    });
+
+    const userView = document.createElement("div");
+    userView.className = "border border-green-700 rounded p-4 bg-black/70";
+
+    userView.innerHTML = `
+      <h2 class="text-lg font-mono text-green-200 mb-2">${user.displayName} (${user.id})</h2>
+      <div class="flex flex-col gap-3">
+
+        <label class="flex items-center gap-2 cursor-pointer">
+          <input type="checkbox" id="show-text" ${user.show.text ? "checked" : ""} />
+          <span>Text anzeigen</span>
+        </label>
+        <textarea id="user-text" rows="3" class="w-full rounded border-green-600 border bg-black/60 text-green-300 font-mono" ${user.show.text ? "" : "disabled"}>${user.text || ""}</textarea>
+
+        <label class="flex items-center gap-2 cursor-pointer">
+          <input type="checkbox" id="show-image" ${user.show.image ? "checked" : ""} />
+          <span>Bild anzeigen</span>
+        </label>
+        <input id="user-image-url" type="text" placeholder="Bild URL" class="w-full rounded border-green-600 border bg-black/60 text-green-300 font-mono" value="${user.image || ""}" ${user.show.image ? "" : "disabled"} />
+        <input type="file" id="upload-image-file" accept="image/*" class="mt-1" style="${user.show.image ? "" : "display:none"}" />
+
+        <label class="flex items-center gap-2 cursor-pointer">
+          <input type="checkbox" id="show-video" ${user.show.video ? "checked" : ""} />
+          <span>YouTube Video anzeigen</span>
+        </label>
+        <input id="user-video-url" type="text" placeholder="YouTube URL" class="w-full rounded border-green-600 border bg-black/60 text-green-300 font-mono" value="${user.video || ""}" ${user.show.video ? "" : "disabled"} />
+
+        <div class="mt-4">
+          <button id="save-user-btn" class="btn-green px-4 py-2 rounded font-mono">Speichern</button>
+        </div>
+      </div>
+    `;
+
+    main.appendChild(userView);
+
+    // Event handlers for show checkboxes
+    const showText = userView.querySelector("#show-text");
+    const textArea = userView.querySelector("#user-text");
+    showText.addEventListener("change", () => {
+      user.show.text = showText.checked;
+      textArea.disabled = !showText.checked;
+      saveUsers();
+    });
+
+    const showImage = userView.querySelector("#show-image");
+    const imageUrlInput = userView.querySelector("#user-image-url");
+    const uploadImageFile = userView.querySelector("#upload-image-file");
+    showImage.addEventListener("change", () => {
+      user.show.image = showImage.checked;
+      imageUrlInput.disabled = !showImage.checked;
+      uploadImageFile.style.display = showImage.checked ? "block" : "none";
+      saveUsers();
+    });
+
+    uploadImageFile.addEventListener("change", (e) => {
+      if (e.target.files && e.target.files[0]) {
+        const file = e.target.files[0];
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+          imageUrlInput.value = ev.target.result; // base64 data url
+        };
+        reader.readAsDataURL(file);
+      }
+    });
+
+    const showVideo = userView.querySelector("#show-video");
+    const videoUrlInput = userView.querySelector("#user-video-url");
+    showVideo.addEventListener("change", () => {
+      user.show.video = showVideo.checked;
+      videoUrlInput.disabled = !showVideo.checked;
+      saveUsers();
+    });
+
+    // Save user button
+    userView.querySelector("#save-user-btn").addEventListener("click", () => {
+      user.text = textArea.value.trim();
+      user.image = imageUrlInput.value.trim();
+      user.video = toEmbedUrl(videoUrlInput.value.trim());
+      saveUsers();
+      alert("Nutzer-Daten gespeichert");
+      renderPublicView();
+    });
+
+    // Show preview
+    let previewDiv = document.createElement("div");
+    previewDiv.className = "mt-4 bg-black border border-green-700 rounded p-3";
+
+    if (user.show.text && user.text) {
+      const p = document.createElement("p");
+      p.textContent = user.text;
+      previewDiv.appendChild(p);
+    }
+    if (user.show.image && user.image) {
+      const img = document.createElement("img");
+      img.src = user.image;
+      img.alt = "User Image";
+      img.className = "max-w-full rounded-md mt-2";
+      previewDiv.appendChild(img);
+    }
+    if (user.show.video && user.video) {
+      const iframe = document.createElement("iframe");
+      iframe.width = "320";
+      iframe.height = "180";
+      iframe.src = user.video;
+      iframe.allow = "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture";
+      iframe.allowFullscreen = true;
+      iframe.className = "mt-2";
+      previewDiv.appendChild(iframe);
+    }
+    main.appendChild(previewDiv);
+  }
+
+  // Login function
+  function login(id) {
+    if (!id) {
+      alert("Bitte User-ID eingeben");
+      return;
+    }
+    const user = findUser(id);
+    if (!user) {
+      alert("User nicht gefunden");
+      return;
+    }
+    currentUserId = id;
+    renderLoggedIn();
+  }
+  // Logout function
+  function logout() {
+    currentUserId = null;
+    renderLogin();
+  }
+
+  // Load users from a JSON file (File object)
+  function loadUsersFile(file) {
+    const reader = new FileReader();
+    reader.onload = e => {
+      try {
+        const json = JSON.parse(e.target.result);
+        if (!Array.isArray(json)) throw new Error("JSON ist keine Liste");
+        users = json;
+        saveUsers();
+        alert("Nutzer geladen");
+        renderLogin();
+      } catch (err) {
+        alert("Fehler beim Laden der Datei: " + err.message);
+      }
+    };
+    reader.readAsText(file);
+  }
+
+  // Download users as JSON file
+  function downloadUsersFile() {
+    const dataStr = JSON.stringify(users, null, 2);
+    const blob = new Blob([dataStr], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "users.json";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  // Initial load
+  loadUsers();
+  renderLogin();
+
+})();
+</script>
+</body>
+</html>
